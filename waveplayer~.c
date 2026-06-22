@@ -25,6 +25,7 @@ typedef struct _waveplayer_tilde {
     t_sample x_gain;                    // current output envelope, ramps between 0 and 1 to avoid clicks
     t_sample x_gain_target;
     t_sample x_gain_inc;                // per-sample ramp step, set from sample rate in the dsp method
+    t_int x_loop_declick_frames;        // fade window (in file frames) used to duck the loop seam, set from sample rate in the dsp method
     double x_pos;                       // position in file, in frames
     t_int x_current_buf_num;            // buffer currently being played
     uint32_t x_data_offset;             // byte offset of the "data" chunk contents
@@ -270,6 +271,29 @@ static t_sample waveplayer_interp(t_waveplayer_tilde *x, int ch, int bufi, t_sam
     );
 }
 
+// duck gain near either edge of the loop window, to mask the waveform
+// discontinuity at the seam; ramps 0->1 moving away from loop_start and
+// 1->0 approaching loop_end, so it fades down before the wrap and back
+// up after it without needing to detect the wrap itself
+static t_sample waveplayer_loop_declick_gain(t_waveplayer_tilde *x)
+{
+    t_int fade = x->x_loop_declick_frames;
+    t_int half = (x->x_loop_end - x->x_loop_start) / 2;
+    double from_start, from_end, g;
+
+    if (fade > half) fade = half;
+    if (fade < 1) return 1;
+
+    from_start = x->x_pos - x->x_loop_start;
+    from_end = x->x_loop_end - x->x_pos;
+    g = (from_start < from_end) ? from_start : from_end;
+    g /= fade;
+
+    if (g < 0) g = 0;
+    if (g > 1) g = 1;
+    return (t_sample)g;
+}
+
 // step the start/stop envelope by one sample, toward x_gain_target
 static void waveplayer_update_gain(t_waveplayer_tilde *x)
 {
@@ -302,7 +326,7 @@ static t_int *waveplayer_tilde_perform_mono(t_int *w)
         waveplayer_update_gain(x);
         if (x->x_running || x->x_gain > 0) {
             waveplayer_advance(x, &bufi, &frac);
-            *out++ = waveplayer_interp(x, 0, bufi, frac) * x->x_gain;
+            *out++ = waveplayer_interp(x, 0, bufi, frac) * x->x_gain * waveplayer_loop_declick_gain(x);
         }
         else *out++ = 0;
     }
@@ -316,14 +340,15 @@ static t_int *waveplayer_tilde_perform_stereo(t_int *w)
     t_sample *out1 = (t_sample *)(w[3]);
     int n = (int)(w[4]);
     int i, bufi;
-    t_sample frac;
+    t_sample frac, declick;
 
     for (i = 0; i < n; i++) {
         waveplayer_update_gain(x);
         if (x->x_running || x->x_gain > 0) {
             waveplayer_advance(x, &bufi, &frac);
-            *out0++ = waveplayer_interp(x, 0, bufi, frac) * x->x_gain;
-            *out1++ = waveplayer_interp(x, 1, bufi, frac) * x->x_gain;
+            declick = x->x_gain * waveplayer_loop_declick_gain(x);
+            *out0++ = waveplayer_interp(x, 0, bufi, frac) * declick;
+            *out1++ = waveplayer_interp(x, 1, bufi, frac) * declick;
         }
         else {
             *out0++ = 0;
@@ -338,6 +363,7 @@ static void waveplayer_tilde_dsp(t_waveplayer_tilde *x, t_signal **sp)
     t_int ramp_samples = (t_int)(sp[0]->s_sr * DECLICK_MS / 1000.0);
     if (ramp_samples < 1) ramp_samples = 1;
     x->x_gain_inc = 1.0f / ramp_samples;
+    x->x_loop_declick_frames = ramp_samples;
 
     if (x->x_channels > 1)
         dsp_add(waveplayer_tilde_perform_stereo, 4, x, sp[0]->s_vec, sp[1]->s_vec, (t_int)sp[0]->s_n);
@@ -426,6 +452,7 @@ static void *waveplayer_tilde_new(t_symbol *s, int argc, t_atom *argv)
     x->x_gain = 1;
     x->x_gain_target = 1;
     x->x_gain_inc = 1.0f / 200; // sane default until dsp() sets it from the real sample rate
+    x->x_loop_declick_frames = 200; // sane default until dsp() sets it from the real sample rate
     x->x_fh = NULL;
     memset(x->x_buf, 0, sizeof(x->x_buf));
     memset(x->x_buf_last3, 0, sizeof(x->x_buf_last3));
