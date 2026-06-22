@@ -1,0 +1,34 @@
+# Audio files
+*.wav
+*.aif
+*.aiff
+*.mp3
+*.mp4
+*.m4a
+*.ogg
+*.flac
+*.opus
+*.caf
+*.sd2
+*.rx2
+*.rex
+*.pdf
+
+# Pure Data
+*.bak
+*.db
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# Pd externals (compiled)
+*.pd_linux
+*.pd_darwin
+*.pd_freebsd
+*.dll
+*.so
+*.dylib
+
